@@ -40,6 +40,22 @@ Personal Vercel project. One-time setup, then `git push` deploys.
    Or push to `main` once the GitHub integration is connected (Vercel will
    auto-deploy from then on).
 
+## Database migrations
+
+The `vercel-build` script (`package.json`) runs `drizzle-kit migrate`
+before `next build`, so every Vercel deploy applies pending migrations
+to the connected Neon database before serving the new code. Both
+production and preview deploys point at the same database (single-user
+app — no per-branch DBs). If a migration fails, the deploy fails and
+the previous version stays live.
+
+To migrate locally instead (e.g. before running the seed script):
+
+```sh
+pnpm dlx vercel@latest env pull .env.local
+pnpm db:migrate
+```
+
 ## Local development
 
 ```sh
