@@ -14,9 +14,12 @@ Personal Vercel project. One-time setup, then `git push` deploys.
 
 2. **Provision storage** in the Vercel dashboard → **Storage**:
 
-   - **Postgres** (Neon-backed free tier). Click *Create* → *Postgres* → connect
-     to the `web-cacher` project. Vercel injects `POSTGRES_URL`,
-     `POSTGRES_URL_NON_POOLING`, etc. into the project env automatically.
+   - **Postgres** (Neon-backed free tier). Click *Create* → *Postgres* →
+     connect to the `web-cacher` project. Vercel injects the full Neon
+     bundle (`POSTGRES_URL`, `POSTGRES_URL_NON_POOLING`, `PG*`,
+     `NEON_*`, etc.). We only consume two of them: `POSTGRES_URL`
+     (pooled, runtime) and `POSTGRES_URL_NON_POOLING` (direct,
+     migrations). The rest are unused.
    - **Blob**. Click *Create* → *Blob* → connect. Vercel injects
      `BLOB_READ_WRITE_TOKEN`.
 
