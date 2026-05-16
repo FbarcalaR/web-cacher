@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { SESSION_COOKIE, verifySessionToken } from "@/lib/auth";
 
 export async function proxy(req: NextRequest) {
-  const { pathname } = req.nextUrl;
+  const { pathname, search } = req.nextUrl;
   if (pathname === "/login" || pathname === "/logout") {
     return NextResponse.next();
   }
@@ -17,9 +17,13 @@ export async function proxy(req: NextRequest) {
     return NextResponse.next();
   }
 
+  // Preserve the full target URL (including query string — share-target
+  // arrives as `/share-target?url=…` and we need that to survive the login
+  // bounce). Encoded as a single `next` param.
+  const target = pathname === "/" ? "" : pathname + search;
   const loginUrl = req.nextUrl.clone();
   loginUrl.pathname = "/login";
-  loginUrl.search = pathname === "/" ? "" : `?next=${encodeURIComponent(pathname)}`;
+  loginUrl.search = target ? `?next=${encodeURIComponent(target)}` : "";
   return NextResponse.redirect(loginUrl);
 }
 
