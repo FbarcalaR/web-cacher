@@ -29,7 +29,14 @@ Personal Vercel project. One-time setup, then `git push` deploys.
    - `APP_PASSWORD` — your chosen password.
    - `SESSION_SECRET` — random 32-byte secret. Generate with
      `openssl rand -base64 32`.
-   - `SCRAPER_API_KEY` — leave blank until Phase 3 (see `plan.md`).
+   - `SCRAPER_PROVIDER` — one of `scrapingbee` / `scraperapi` /
+     `zenrows`. Pick one and sign up for its free tier; smoke-test
+     before deploying with:
+     ```sh
+     SCRAPER_API_KEY=<key> pnpm scrape:smoke <provider>
+     ```
+     A green run on both ImmoScout24 and Immowelt is the bar.
+   - `SCRAPER_API_KEY` — paste the key for the provider you picked.
 
 4. **First deploy:**
 
