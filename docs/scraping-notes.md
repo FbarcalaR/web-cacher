@@ -22,10 +22,20 @@ scraping-service plan.
 
 ## Scraping service: chosen and shortlist
 
-**Current choice: ScrapingAnt.** Picked after a market scan in May 2026.
-The only provider with a *recurring* monthly free tier (10,000 credits,
-no credit card) that also includes residential proxies — which the two
-target sites need.
+**Current setup: per-host routing.**
+
+| Source        | Provider     | Why                                                                                                     |
+| ------------- | ------------ | ------------------------------------------------------------------------------------------------------- |
+| Immowelt      | ScrapingAnt  | ScrapingAnt's residential proxy clears Immowelt's Cloudflare screen. Recurring 10k credits/mo free.     |
+| ImmoScout24   | Oxylabs      | DataDome on ImmoScout24 returns HTTP 423 to ScrapingAnt ("Our browser was detected by target site"). Oxylabs' Web Unblocker handles DataDome. 2,000-result uncapped-time trial. |
+
+Configured via env vars (see `.env.example`): `SCRAPER_PROVIDER` +
+`SCRAPER_API_KEY` for the default, plus optional
+`SCRAPER_PROVIDER_IMMOSCOUT24` + `SCRAPER_API_KEY_IMMOSCOUT24` to
+override for that one host. Oxylabs' API key is "username:password" in
+a single string.
+
+### Shortlist (May 2026 scan)
 
 | Service        | Free tier (current)                | DataDome-capable proxy in free? | Notes                                                                |
 | -------------- | ---------------------------------- | ------------------------------- | -------------------------------------------------------------------- |
@@ -51,29 +61,34 @@ Decision criteria, in order:
 Choice is hidden behind `lib/scrape/client.ts` so it's a one-file swap
 later.
 
-### Ultra-premium proxies are required, not optional
-
-ImmoScout24 sits behind DataDome. Standard premium proxies aren't
-enough — ScraperAPI returns `HTTP 500 ... Protected domains may
-require adding premium=true OR ultra_premium=true`. Immowelt's
-Cloudflare-class screen is similar.
+### Per-provider protected-host flags
 
 `lib/scrape/client.ts` carries a `ULTRA_PREMIUM_HOSTS` set and routes
 those URLs through each provider's hardest tier:
 
-| Provider        | Flag for protected hosts        | Credit cost (per call, with JS render) |
-| --------------- | ------------------------------- | -------------------------------------- |
-| **ScrapingAnt** | `proxy_type=residential`        | 250 credits                            |
-| ScraperAPI      | `ultra_premium=true`            | ~30 credits                            |
-| ScrapingBee     | `stealth_proxy=true`            | ~75 credits                            |
-| ZenRows         | `antibot=true` + premium proxy  | varies, generally higher               |
+| Provider        | Flag for protected hosts        | Credit cost (per call, with JS render) | DataDome on ImmoScout24 |
+| --------------- | ------------------------------- | -------------------------------------- | ----------------------- |
+| **Oxylabs**     | `source=universal render=html` + geo=Germany | 1 result / call           | Works                   |
+| **ScrapingAnt** | `proxy_type=residential`        | 250 credits                            | Fails — HTTP 423        |
+| ScraperAPI      | `ultra_premium=true`            | ~30 credits                            | Free tier rejects request |
+| ScrapingBee     | `stealth_proxy=true`            | ~75 credits                            | Untested in prod        |
+| ZenRows         | `antibot=true` + premium proxy  | varies, generally higher               | Untested in prod        |
 
-On ScrapingAnt's 10k-credits/mo recurring free tier, that's ~40
-protected saves/month. Sufficient for personal-use volume.
+### Why we don't use a single provider
 
-ScraperAPI's free tier turned out **not** to include premium pools at
-all — it returns HTTP 403 with "Your current plan does not allow you
-to use our premium proxies". That ruled it out of the free-tier race.
+Two attempts went wrong before settling on per-host routing:
+
+- **ScraperAPI free tier rejects premium proxies entirely.** Returns
+  HTTP 403 with "Your current plan does not allow you to use our
+  premium proxies". Unusable on the free tier.
+- **ScrapingAnt residential proxies pass Immowelt but fail
+  ImmoScout24.** HTTP 423 from ScrapingAnt: "Our browser was detected
+  by target site". DataDome catches their headless residential.
+
+Oxylabs Web Scraper API is documented as DataDome-capable and the 2,000-
+result trial has no time cap, which gives us ~5+ years of personal
+volume on ImmoScout24 saves alone. Immowelt stays on ScrapingAnt to
+preserve the recurring free quota.
 
 ---
 
