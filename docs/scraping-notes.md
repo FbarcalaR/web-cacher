@@ -45,6 +45,25 @@ Decision criteria, in order:
 Choice is hidden behind `lib/scrape/client.ts` so it's a one-file swap
 later.
 
+### Ultra-premium proxies are required, not optional
+
+ImmoScout24 sits behind DataDome. Standard premium proxies aren't
+enough — ScraperAPI returns `HTTP 500 ... Protected domains may
+require adding premium=true OR ultra_premium=true`. Immowelt's
+Cloudflare-class screen is similar.
+
+`lib/scrape/client.ts` carries a `ULTRA_PREMIUM_HOSTS` set and routes
+those URLs through each provider's hardest tier:
+
+| Provider     | Flag for protected hosts        | Credit cost (per call, with JS render) |
+| ------------ | ------------------------------- | -------------------------------------- |
+| ScraperAPI   | `ultra_premium=true`            | ~30 credits                            |
+| ScrapingBee  | `stealth_proxy=true`            | ~75 credits                            |
+| ZenRows      | `antibot=true` + premium proxy  | varies, generally higher               |
+
+On the 1k-credits/mo free tier this comfortably covers ~30 saves
+per month via ScraperAPI. ScrapingBee burns through credits faster.
+
 ---
 
 ## ImmoScout24 (`immobilienscout24.de`)

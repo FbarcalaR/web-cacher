@@ -80,12 +80,43 @@ function readProvider(): ScrapeProvider {
   );
 }
 
+/**
+ * Hosts that sit behind aggressive anti-bot (DataDome / Cloudflare-bot-tier)
+ * and only respond to ultra-premium proxies, not standard residential.
+ * ImmoScout24 confirmed via a 500 response from ScraperAPI saying as much.
+ */
+const ULTRA_PREMIUM_HOSTS = new Set([
+  "www.immobilienscout24.de",
+  "immobilienscout24.de",
+  "www.immowelt.de",
+  "immowelt.de",
+]);
+
+function targetHostname(targetUrl: string): string {
+  try {
+    return new URL(targetUrl).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function needsUltraPremium(targetUrl: string): boolean {
+  return ULTRA_PREMIUM_HOSTS.has(targetHostname(targetUrl));
+}
+
 function scrapingBeeUrl(targetUrl: string, apiKey: string): string {
   const u = new URL("https://app.scrapingbee.com/api/v1/");
   u.searchParams.set("api_key", apiKey);
   u.searchParams.set("url", targetUrl);
   u.searchParams.set("render_js", "true");
-  u.searchParams.set("premium_proxy", "true");
+  // stealth_proxy is ScrapingBee's equivalent of "ultra" — required for
+  // DataDome / Cloudflare-bot-tier sites. Costs ~75 credits/call; cheaper
+  // standard premium_proxy=true (~25 credits) is fine for everything else.
+  if (needsUltraPremium(targetUrl)) {
+    u.searchParams.set("stealth_proxy", "true");
+  } else {
+    u.searchParams.set("premium_proxy", "true");
+  }
   u.searchParams.set("country_code", "de");
   // Wait long enough for the hydration script to set the global state.
   u.searchParams.set("wait", "3000");
@@ -97,7 +128,15 @@ function scraperApiUrl(targetUrl: string, apiKey: string): string {
   u.searchParams.set("api_key", apiKey);
   u.searchParams.set("url", targetUrl);
   u.searchParams.set("render", "true");
-  u.searchParams.set("premium", "true");
+  // premium=true (~10 credits) is fine for most sites; ultra_premium=true
+  // (~30 credits) is required for DataDome-protected ones like
+  // ImmoScout24. Setting only one — ScraperAPI rejects requests that set
+  // both.
+  if (needsUltraPremium(targetUrl)) {
+    u.searchParams.set("ultra_premium", "true");
+  } else {
+    u.searchParams.set("premium", "true");
+  }
   u.searchParams.set("country_code", "de");
   return u.toString();
 }
@@ -108,6 +147,10 @@ function zenrowsUrl(targetUrl: string, apiKey: string): string {
   u.searchParams.set("url", targetUrl);
   u.searchParams.set("js_render", "true");
   u.searchParams.set("premium_proxy", "true");
+  // ZenRows uses antibot=true for DataDome-class screens.
+  if (needsUltraPremium(targetUrl)) {
+    u.searchParams.set("antibot", "true");
+  }
   u.searchParams.set("proxy_country", "de");
   return u.toString();
 }
