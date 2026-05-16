@@ -2,7 +2,9 @@ import { asc, eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import sanitizeHtml from "sanitize-html";
 
-import { StatusBadge } from "@/components/status-badge";
+import { DeleteAdButton } from "@/components/delete-ad-button";
+import { NotesEditor } from "@/components/notes-editor";
+import { StatusSelect } from "@/components/status-select";
 import { db } from "@/lib/db/client";
 import { adPhotos, ads } from "@/lib/db/schema";
 import {
@@ -55,7 +57,7 @@ export default async function AdPage({ params }: { params: Promise<{ id: string 
       <header className="flex flex-col gap-2">
         <div className="flex items-start justify-between gap-3">
           <h1 className="text-xl font-semibold leading-snug tracking-tight">{ad.title}</h1>
-          <StatusBadge status={ad.status} />
+          <StatusSelect adId={ad.id} status={ad.status} />
         </div>
         {cityOnly ? <p className="text-sm text-muted-foreground">{cityOnly}</p> : null}
       </header>
@@ -103,14 +105,9 @@ export default async function AdPage({ params }: { params: Promise<{ id: string 
         />
       ) : null}
 
-      <section className="flex flex-col gap-1">
-        <h2 className="text-sm font-medium text-muted-foreground">Notes</h2>
-        <p className="min-h-12 whitespace-pre-wrap rounded-md border border-border bg-muted/40 px-3 py-2 text-sm">
-          {ad.notes ?? <span className="text-muted-foreground">No notes yet.</span>}
-        </p>
-      </section>
+      <NotesEditor adId={ad.id} initial={ad.notes} />
 
-      <footer>
+      <footer className="flex flex-col gap-2">
         <a
           href={ad.sourceUrl}
           target="_blank"
@@ -119,6 +116,7 @@ export default async function AdPage({ params }: { params: Promise<{ id: string 
         >
           Open original
         </a>
+        <DeleteAdButton adId={ad.id} />
       </footer>
     </article>
   );
