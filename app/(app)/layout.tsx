@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { InstallPrompt } from "@/components/install-prompt";
+
 export default function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-dvh flex-col">
@@ -11,12 +13,20 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <Link href="/" className="text-base font-semibold tracking-tight">
             web-cacher
           </Link>
-          <Link
-            href="/add"
-            className="rounded-full bg-accent px-3 py-1.5 text-sm font-medium text-background"
-          >
-            Add
-          </Link>
+          <nav className="flex items-center gap-2">
+            <Link
+              href="/help"
+              className="rounded-full px-3 py-1.5 text-sm font-medium text-muted-foreground"
+            >
+              Help
+            </Link>
+            <Link
+              href="/add"
+              className="rounded-full bg-accent px-3 py-1.5 text-sm font-medium text-background"
+            >
+              Add
+            </Link>
+          </nav>
         </div>
       </header>
       <main
@@ -25,6 +35,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       >
         {children}
       </main>
+      <InstallPrompt />
     </div>
   );
 }
