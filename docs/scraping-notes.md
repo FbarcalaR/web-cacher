@@ -1,13 +1,8 @@
 # Scraping notes
 
-What we know about the two source sites and how we plan to extract data
-from them. Updated as we learn more.
-
-> **Important:** the per-site field tables below are **best-guess
-> starting points based on conventions**, not verified field paths. We
-> verify them in Phase 1 by saving real expose HTML as fixtures and
-> reading the actual `__NEXT_DATA__` / JSON-LD shapes. Replace this
-> warning and the question marks with verified paths during Phase 2.
+What we know about the two source sites and how we extract data from
+them. Verified against the fixtures in `lib/parsers/__fixtures__/` —
+update this file whenever a parser or selector changes.
 
 ## Bot-detection test (2026-05-15)
 
@@ -21,10 +16,9 @@ cookies:
 | `https://www.immobilienscout24.de/`            | **403 Forbidden** |
 | `https://www.immobilienscout24.de/expose/<id>` | **403 Forbidden** |
 
-Both reject cloud egress unconditionally. We treat plain server-side
-`fetch` as unusable and route through a **scraping service with
-residential proxies + headless browser** for the primary path. See
-`architecture.md`.
+Both reject cloud egress unconditionally. Plain server-side `fetch` is
+unusable as a primary path — see `docs/architecture.md` for the
+scraping-service plan.
 
 ## Scraping service shortlist
 
@@ -37,98 +31,179 @@ To be decided in Phase 3 ticket **#3.1**. Free-tier candidates:
 | ZenRows     | 1,000 credits/mo      | Yes           | Sells itself on anti-bot bypass.                                   |
 | Apify       | $5 platform credit/mo | Yes           | Marketplace has prebuilt ImmoScout24 / Immowelt actors — variable quality, watch for maintenance. |
 
-Decision criteria:
-1. **Does it actually get past the bot check on a fresh expose?** (smoke
-   test in #3.1).
-2. **Does the returned HTML still contain `__NEXT_DATA__`?** (some
-   services strip / re-render and we'd lose the easy parse path).
+Decision criteria, in order:
+
+1. **Does it bypass the bot check on a fresh expose?** Smoke test in #3.1.
+2. **Does the rendered HTML still contain the structured blobs we parse?**
+   Specifically: `keyValues = {…}` and `IS24.expose = {… galleryData …}`
+   for ImmoScout24, and `__UFRN_LIFECYCLE_SERVERREQUEST__` for Immowelt.
+   Some services strip / rewrite inline scripts; those would force us
+   back to fragile DOM-only extraction.
 3. **Free-tier headroom** for personal use (target: 30 saves/mo with
    slack for retries).
 
-The choice is hidden behind `lib/scrape/client.ts` so it's a one-file
-swap later.
+Choice is hidden behind `lib/scrape/client.ts` so it's a one-file swap
+later.
+
+---
 
 ## ImmoScout24 (`immobilienscout24.de`)
 
-- Expose URL pattern: `https://www.immobilienscout24.de/expose/{listingId}`.
-- React-rendered. Historically ships server-side data either in a
-  `<script id="serverApp...">` blob or a Redux/Apollo cache; recent
-  versions tend to use a `__NEXT_DATA__`-shaped JSON blob.
-- JSON-LD `RealEstateListing` blocks are usually present and contain a
-  cleaner subset (title, price, size, address) — good for
-  cross-checking.
-- Bot protection: DataDome class. Cookies (`datadome`, `reese84`) are
-  set by the user's browser after the first interactive load. Don't
-  try to replay these from a server.
-- Images: `pictures.immobilienscout24.de` with multiple size variants
-  in the URL (`...ORIG.jpg`, `..._large.jpg`, etc.). Pick the largest.
-  May require `Referer: https://www.immobilienscout24.de/`.
+- Expose URL: `https://www.immobilienscout24.de/expose/{listingId}`.
+- Server-rendered (not Next.js). No `__NEXT_DATA__`, but two inline
+  globals carry everything we need.
+- Bot protection: DataDome class. `datadome` / `reese84` cookies are
+  set after a real interactive load; we don't try to replay them.
+- Images served from `pictures.immobilienscout24.de` with multiple size
+  variants in the URL path (`/ORIG/...`, `/legacy_thumbnail/...`). We
+  store the `fullSizePictureUrl`.
 
-### Fields to extract (best guess — verify in Phase 2)
+### Extraction signals
 
-| Field        | Likely source                                                       |
-| ------------ | ------------------------------------------------------------------- |
-| Title        | `__NEXT_DATA__` → expose title; or `<h1>`.                          |
-| Cold rent    | Field commonly labelled `Kaltmiete` / `baseRent`. **Verify.**       |
-| Warm rent    | `Warmmiete` / `totalRent`. **Verify.**                              |
-| Deposit      | `Kaution`. **Verify.**                                              |
-| Size         | `livingSpace`. **Verify.**                                          |
-| Rooms        | `noRooms` / `numberOfRooms`. **Verify.**                            |
-| Address      | `street`, `houseNumber`, `zipCode`, `locality`. Note: street is sometimes redacted to district only. |
-| Description  | HTML blocks: "Objektbeschreibung", "Lage", "Ausstattung", "Sonstiges". Concatenate. |
-| Features     | Booleans like `hasBalcony`, `hasKitchen`, `hasGarden` → human-readable strings. |
-| Images       | Gallery attachments array, largest variant.                         |
+#### 1. `keyValues = {…}` — strict JSON, primary
+
+A `<script>` tag inline-emits
+
+```js
+keyValues = {"obj_regio1":"Bayern","obj_baseRent":"1570", …};
+```
+
+with ~60 `obj_*` keys. Strict JSON (double-quoted keys + values). We
+walk forward from `keyValues = ` and brace-match to slice the object,
+then `JSON.parse`. See `lib/parsers/immoscout24.ts`.
+
+| Our field          | keyValues key                                | Notes                                                            |
+| ------------------ | -------------------------------------------- | ---------------------------------------------------------------- |
+| `sourceId`         | `obj_scoutId`                                |                                                                  |
+| `priceColdCents`   | `obj_baseRent`                               | Plain euro integer string ("1570"). Multiply by 100.             |
+| `priceWarmCents`   | `obj_totalRent`                              |                                                                  |
+| `sizeSqm`          | `obj_livingSpace`                            | "43.48" — already English decimal.                               |
+| `rooms`            | `obj_noRooms`                                | "1" / "2" / "4.5".                                               |
+| `addressZip`       | `obj_zipCode`                                |                                                                  |
+| `addressCity`      | `obj_regio2`                                 | Underscores in compound names — replace with space.              |
+| `addressStreet`    | `obj_streetPlain` ?? `obj_street`            | Both can be `"no_information"`; treat as null in that case.      |
+| `features` (some)  | `obj_balcony` / `obj_hasKitchen` / `obj_cellar` / `obj_garden` / `obj_lift` / `obj_newlyConst` / `obj_barrierFree` / `obj_assistedLiving` | `"y"` → push the corresponding label. |
+| `features` (pets)  | `obj_petsAllowed`                            | `"yes"` → "Haustiere erlaubt"; `"negotiable"` → "…nach Absprache". |
+| (raw payload)      | the whole JSON                               | Stored under `raw_payload.keyValues` for reprocessing.            |
+
+#### 2. `IS24.expose = { …, galleryData: {…}, … }` — JS object literal, photos
+
+The outer `IS24.expose` assignment uses JS syntax (unquoted keys), so
+it's not directly JSON-parseable. But `galleryData:` is followed by a
+JSON-stringified payload that IS strict JSON. We walk forward from
+`galleryData: ` and brace-match.
+
+```ts
+gallery.images[].fullSizePictureUrl  // photo URL
+gallery.images[].caption             // e.g. "Wohn-Schlafbereich"
+gallery.images[].type                // "PICTURE" | "FLOORPLAN" — we keep both
+```
+
+#### 3. JSON-LD — title fallback
+
+One `<script type="application/ld+json">` block contains a
+`RealEstateListing` node whose `name` is the human-friendly title
+("Loftartiges Neubau-Appartement mit Loggia in München-Schwabing").
+
+#### 4. DOM — description sections, deposit
+
+Four free-text sections, each in its own `<pre>` tag:
+
+| Section            | Selector                            |
+| ------------------ | ----------------------------------- |
+| Objektbeschreibung | `pre.is24qa-objektbeschreibung`     |
+| Lage               | `pre.is24qa-lage`                   |
+| Ausstattung        | `pre.is24qa-ausstattung`            |
+| Sonstiges          | `pre.is24qa-sonstiges`              |
+
+We concatenate them into a single sanitised `descriptionHtml` with `<h2>`
+headings between sections.
+
+Deposit lives in `div.is24qa-kaution-o-genossenschaftsanteile` and is
+often a free-text phrase like `"3 Netto-Kaltmieten"`. If it doesn't
+start with a digit we leave `depositCents` as null.
+
+---
 
 ## Immowelt (`immowelt.de`)
 
-- Expose URL pattern: `https://www.immowelt.de/expose/{shortId}`.
-- React/Next.js. Historically embeds initial state in `__NEXT_DATA__`;
-  the expose payload usually lives under `props.pageProps.estate` or
-  similar.
-- JSON-LD `Product` / `RealEstateListing` blocks generally present.
-- Bot protection: Cloudflare class. Less aggressive than ImmoScout24 in
-  past, but still 403s our cloud IP today.
-- Images: `pictures.immowelt.de` / Akamai CDN. URL contains a size
-  segment (`/700/`, `/1024/`); swap to the largest.
+- Expose URL: `https://www.immowelt.de/expose/{shortId}` (e.g.
+  `26I3AFZ5TPN9`).
+- React-rendered, but **not** Next.js — no `__NEXT_DATA__`. JSON-LD is
+  only template metadata and not useful for structured fields.
+- Bot protection: Cloudflare / DataDome class.
+- Images: `https://mms.immowelt.de/<sha>/<uuid>.jpg?ci_seal=<token>`,
+  optionally with `&w=...&h=...` size hints.
 
-### Fields to extract (best guess — verify in Phase 2)
+### Extraction signal
 
-| Field        | Likely source                                                  |
-| ------------ | -------------------------------------------------------------- |
-| Title        | `estate.title` / `<h1>`. **Verify.**                           |
-| Cold rent    | `estate.prices.basicRent`. **Verify.**                         |
-| Warm rent    | `estate.prices.totalRent`. **Verify.**                         |
-| Deposit      | `estate.prices.deposit`. **Verify.**                           |
-| Size         | `estate.areas.livingArea`. **Verify.**                         |
-| Rooms        | `estate.rooms`. **Verify.**                                    |
-| Address      | `estate.address.{street, houseNumber, zipCode, city}`. **Verify.** |
-| Description  | `estate.texts[]` keyed by type: `description`, `location`, `equipment`, `other`. **Verify.** |
-| Features     | `estate.features[]`. **Verify.**                               |
-| Images       | `estate.media[]` filtered to type=image; largest variant. **Verify.** |
+#### `__UFRN_LIFECYCLE_SERVERREQUEST__` — single source of truth
+
+A `<script id="__UFRN_LIFECYCLE_SERVERREQUEST__">` tag emits
+
+```js
+window["__UFRN_LIFECYCLE_SERVERREQUEST__"] = JSON.parse("…escaped JSON…");
+```
+
+The body inside `JSON.parse("…")` is a JS string literal that
+unescapes (via one round of `JSON.parse('"' + body + '"')`) into the
+real JSON text, which is then parsed a second time. The resulting
+state lives under `app_cldp.data.classified`.
+
+| Our field          | Path under `app_cldp.data.classified`                                  |
+| ------------------ | ---------------------------------------------------------------------- |
+| `sourceId`         | `id`                                                                   |
+| `title`            | `sections.mainDescription.headline`                                    |
+| `descriptionHtml`  | `sections.mainDescription.description` + `sections.areaDescription.description` + `sections.extendedInfoDescription.description` (concatenated with `<h2>` separators) |
+| `priceColdCents`   | `sections.hardFacts.price.ariaLabel` (e.g. `"1920 €"`)                 |
+| `priceWarmCents`   | `sections.price.breakdown.total.ariaLabel` (e.g. `"2400 €"`, sometimes English-decimal like `"10622.38 €"`) |
+| `sizeSqm`          | `sections.hardFacts.facts[type=livingSpace].splitValue`                |
+| `rooms`            | `sections.hardFacts.facts[type=numberOfRooms].splitValue`              |
+| `addressCity`      | `sections.location.address.city`                                       |
+| `addressZip`       | `sections.location.address.zipCode`                                    |
+| `addressStreet`    | `sections.location.address.district` (Immowelt redacts the actual street; we store the district instead) |
+| `features`         | `sections.features.preview[].value` (already localised: "Einbauküche", "Personenaufzug", …) |
+| `photos`           | `sections.gallery.images[].url` (full CDN URL, seal included)          |
+| `depositCents`     | not exposed in the state we use — left null                            |
+| (raw payload)      | the whole `classified` blob, stored under `raw_payload.classified`     |
+
+`splitValue` for rooms uses the German comma (`"1,5"`); the parser
+normalises through `parseNumericString` so the DB gets `"1.5"`.
+
+---
 
 ## Extractor strategy
 
-A single function per site:
+Per `lib/parsers/index.ts`:
 
 ```ts
-parse(url: string, html: string): ParsedAd
+parseAd(url, html) → ParsedAd
 ```
 
-1. Parse `html` with `node-html-parser` or `linkedom` (lighter than
-   jsdom).
-2. Try `__NEXT_DATA__` first — most stable.
-3. Fall back to JSON-LD.
-4. Fall back to CSS selectors keyed on visible labels (e.g. find the
-   element whose text is `Kaltmiete` and read its sibling).
-5. Always preserve the raw HTML / extracted blob in `raw_payload` so we
-   can reprocess later when selectors break.
+1. Route by hostname (`www.immobilienscout24.de` → `parseImmoScout24`,
+   `www.immowelt.de` → `parseImmowelt`).
+2. Each per-site parser extracts the primary signal, throws if missing
+   (so a bot-blocked or empty page fails loudly), then maps to the
+   shared `ParsedAd` shape.
+3. The result is run through `parsedAdSchema` (Zod) so a refactor that
+   forgets a required field fails at the parser boundary instead of
+   the DB insert.
+4. Tests in `lib/parsers/__tests__/*.test.ts` assert each fixture
+   produces the right values (prices, size, rooms, zip, photo count).
+
+The full extracted blob is stored in the `ads.raw_payload` jsonb
+column so we can reprocess historical ads after a parser update
+without re-fetching the source.
 
 ## When parsers will break
 
-These sites ship UI changes regularly. Symptoms:
+Symptoms:
 
 - Ingest succeeds but fields come back `null`.
-- New `__NEXT_DATA__` shape.
+- Tests start failing against a freshly re-fetched fixture.
+- The "primary signal missing" error fires on a page that looks fine
+  in a browser (signal moved or got renamed).
 
-Recovery: update the parser, run `pnpm reprocess <ad_id>` to re-extract
-from the stored `raw_payload`. We don't need to re-fetch the source.
+Recovery: capture a fresh fixture, update the parser + field-path
+table in this doc, run `pnpm reprocess <ad_id>` (script to be added in
+Phase 6) to re-extract from `raw_payload`.
