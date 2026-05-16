@@ -3,7 +3,7 @@
  * only ever calls `fetchRenderedHtml(url)` — swapping providers means
  * changing two env vars, not touching any callers.
  *
- * Provider choice is set via `SCRAPER_PROVIDER` (default: scrapingbee).
+ * Provider choice is set via `SCRAPER_PROVIDER` (default: scrapingant).
  * API key is read from `SCRAPER_API_KEY`.
  *
  * All providers are instructed to:
@@ -13,9 +13,10 @@
  *   - return the final HTML after JS has run
  */
 
-export type ScrapeProvider = "scrapingbee" | "scraperapi" | "zenrows";
+export type ScrapeProvider = "scrapingant" | "scrapingbee" | "scraperapi" | "zenrows";
 
 const PROVIDER_DEFAULTS: Record<ScrapeProvider, (url: string, apiKey: string) => string> = {
+  scrapingant: scrapingAntUrl,
   scrapingbee: scrapingBeeUrl,
   scraperapi: scraperApiUrl,
   zenrows: zenrowsUrl,
@@ -71,12 +72,12 @@ export async function fetchRenderedHtml(
 }
 
 function readProvider(): ScrapeProvider {
-  const raw = (process.env.SCRAPER_PROVIDER ?? "scrapingbee").toLowerCase();
+  const raw = (process.env.SCRAPER_PROVIDER ?? "scrapingant").toLowerCase();
   if (raw in PROVIDER_DEFAULTS) return raw as ScrapeProvider;
   throw new ScrapeError(
     `Unknown SCRAPER_PROVIDER "${raw}" — must be one of: ${Object.keys(PROVIDER_DEFAULTS).join(", ")}`,
     null,
-    "scrapingbee",
+    "scrapingant",
   );
 }
 
@@ -102,6 +103,23 @@ function targetHostname(targetUrl: string): string {
 
 function needsUltraPremium(targetUrl: string): boolean {
   return ULTRA_PREMIUM_HOSTS.has(targetHostname(targetUrl));
+}
+
+function scrapingAntUrl(targetUrl: string, apiKey: string): string {
+  const u = new URL("https://api.scrapingant.com/v2/general");
+  u.searchParams.set("url", targetUrl);
+  u.searchParams.set("browser", "true");
+  // Residential proxies (~250 credits/call) are needed for DataDome-protected
+  // hosts. Datacenter proxies (~10 credits/call) are fine for everything
+  // else. The recurring 10k credits/mo free tier covers ~40 protected saves
+  // or ~1000 unprotected saves per month.
+  u.searchParams.set(
+    "proxy_type",
+    needsUltraPremium(targetUrl) ? "residential" : "datacenter",
+  );
+  u.searchParams.set("proxy_country", "DE");
+  u.searchParams.set("x-api-key", apiKey);
+  return u.toString();
 }
 
 function scrapingBeeUrl(targetUrl: string, apiKey: string): string {
