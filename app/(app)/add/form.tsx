@@ -23,6 +23,18 @@ export function AddAdForm() {
           required
           defaultValue={state.url}
           placeholder="https://www.immobilienscout24.de/expose/…"
+          onPaste={(e) => {
+            // Mobile share menus often paste a sentence like "Check this:
+            // https://… (3 rooms, 1500€)". The native <input type=url> then
+            // rejects on submit. Extract just the first http(s) URL and
+            // drop the rest so the form is happy.
+            const pasted = e.clipboardData.getData("text");
+            const match = pasted.match(/https?:\/\/[^\s]+/);
+            if (match && match[0] !== pasted.trim()) {
+              e.preventDefault();
+              e.currentTarget.value = match[0];
+            }
+          }}
           className="rounded-md border border-border bg-muted px-3 py-2 text-base placeholder:text-muted-foreground"
         />
       </label>
