@@ -20,16 +20,22 @@ Both reject cloud egress unconditionally. Plain server-side `fetch` is
 unusable as a primary path — see `docs/architecture.md` for the
 scraping-service plan.
 
-## Scraping service shortlist
+## Scraping service: chosen and shortlist
 
-To be decided in Phase 3 ticket **#3.1**. Free-tier candidates:
+**Current choice: ScrapingAnt.** Picked after a market scan in May 2026.
+The only provider with a *recurring* monthly free tier (10,000 credits,
+no credit card) that also includes residential proxies — which the two
+target sites need.
 
-| Service     | Free tier             | JS rendering? | Notes                                                              |
-| ----------- | --------------------- | ------------- | ------------------------------------------------------------------ |
-| ScrapingBee | 1,000 credits/mo      | Yes           | JS render ~5–25 credits/call → ~40–200 expose fetches/mo free.     |
-| ScraperAPI  | 1,000 credits/mo      | Yes           | Similar pricing model.                                             |
-| ZenRows     | 1,000 credits/mo      | Yes           | Sells itself on anti-bot bypass.                                   |
-| Apify       | $5 platform credit/mo | Yes           | Marketplace has prebuilt ImmoScout24 / Immowelt actors — variable quality, watch for maintenance. |
+| Service        | Free tier (current)                | DataDome-capable proxy in free? | Notes                                                                |
+| -------------- | ---------------------------------- | ------------------------------- | -------------------------------------------------------------------- |
+| **ScrapingAnt** | **10,000 credits/mo, recurring**   | Yes (residential = 250 cr)     | **~40 protected saves/mo free.** Datacenter mode (10 cr) is fine for non-protected hosts. |
+| Oxylabs        | 2,000 results, uncapped trial      | Yes                            | Strong DataDome reputation. ~2,000 lifetime saves, then $49/mo Micro plan. Best fallback. |
+| Bright Data    | None (deposit-match promo)         | N/A (paid)                     | PAYG ~$1.50/1k success — ~$0.05/mo for 30 saves. Top-tier bypass. |
+| ScrapingBee    | 1,000 credits, one-time            | Stealth = 75 cr → ~13 reqs     | Trial only. $49/mo entry plan.                                      |
+| ScraperAPI     | 1,000 credits, *no premium pools*  | **No**                         | Confirmed by HTTP 403 in our deploy. Free tier unusable for this app. |
+| ZenRows        | 14-day trial, 40 antibot reqs      | Trial only                     | $69/mo entry plan.                                                  |
+| Apify          | $5 platform credit/mo, recurring   | Via marketplace actors         | Variable quality / maintenance per actor.                           |
 
 Decision criteria, in order:
 
@@ -55,14 +61,19 @@ Cloudflare-class screen is similar.
 `lib/scrape/client.ts` carries a `ULTRA_PREMIUM_HOSTS` set and routes
 those URLs through each provider's hardest tier:
 
-| Provider     | Flag for protected hosts        | Credit cost (per call, with JS render) |
-| ------------ | ------------------------------- | -------------------------------------- |
-| ScraperAPI   | `ultra_premium=true`            | ~30 credits                            |
-| ScrapingBee  | `stealth_proxy=true`            | ~75 credits                            |
-| ZenRows      | `antibot=true` + premium proxy  | varies, generally higher               |
+| Provider        | Flag for protected hosts        | Credit cost (per call, with JS render) |
+| --------------- | ------------------------------- | -------------------------------------- |
+| **ScrapingAnt** | `proxy_type=residential`        | 250 credits                            |
+| ScraperAPI      | `ultra_premium=true`            | ~30 credits                            |
+| ScrapingBee     | `stealth_proxy=true`            | ~75 credits                            |
+| ZenRows         | `antibot=true` + premium proxy  | varies, generally higher               |
 
-On the 1k-credits/mo free tier this comfortably covers ~30 saves
-per month via ScraperAPI. ScrapingBee burns through credits faster.
+On ScrapingAnt's 10k-credits/mo recurring free tier, that's ~40
+protected saves/month. Sufficient for personal-use volume.
+
+ScraperAPI's free tier turned out **not** to include premium pools at
+all — it returns HTTP 403 with "Your current plan does not allow you
+to use our premium proxies". That ruled it out of the free-tier race.
 
 ---
 
