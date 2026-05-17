@@ -9,7 +9,7 @@ const SUPPORTED_HOSTS = [
 
 /**
  * Web Share Target endpoint. Chrome on Android delivers a GET here when the
- * user picks web-cacher from the system share sheet. The URL may land in the
+ * user picks wohnvault from the system share sheet. The URL may land in the
  * `url` query param (manifest mapping), or — if the sharing app didn't
  * advertise its content as a URL — embedded in the `text` param. Try both.
  */

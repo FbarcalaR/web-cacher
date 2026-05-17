@@ -10,12 +10,12 @@ Personal Vercel project. One-time setup, then `git push` deploys.
    pnpm dlx vercel@latest link
    ```
 
-   Pick the personal scope; let it create the project (name: `web-cacher`).
+   Pick the personal scope; let it create the project (name: `wohnvault`).
 
 2. **Provision storage** in the Vercel dashboard → **Storage**:
 
    - **Postgres** (Neon-backed free tier). Click *Create* → *Postgres* →
-     connect to the `web-cacher` project. Vercel injects the full Neon
+     connect to the `wohnvault` project. Vercel injects the full Neon
      bundle (`POSTGRES_URL`, `POSTGRES_URL_NON_POOLING`, `PG*`,
      `NEON_*`, etc.). We only consume two of them: `POSTGRES_URL`
      (pooled, runtime) and `POSTGRES_URL_NON_POOLING` (direct,

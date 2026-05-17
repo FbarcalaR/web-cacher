@@ -1,7 +1,7 @@
 {
-  "name": "web-cacher",
-  "short_name": "web-cacher",
-  "description": "Personal archive for ImmoScout24 and Immowelt ads.",
+  "name": "wohnvault",
+  "short_name": "wohnvault",
+  "description": "Personal vault for ImmoScout24 and Immowelt ads.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

@@ -11,7 +11,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           style={{ paddingTop: "env(safe-area-inset-top)" }}
         >
           <Link href="/" className="text-base font-semibold tracking-tight">
-            web-cacher
+            wohnvault
           </Link>
           <nav className="flex items-center gap-2">
             <Link

@@ -1,4 +1,4 @@
-# web-cacher
+# wohnvault
 
 A personal, mobile-first archive for real estate ads from **ImmoScout24** and
 **Immowelt**.
