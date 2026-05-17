@@ -1,4 +1,4 @@
-export const SESSION_COOKIE = "wc_session";
+export const SESSION_COOKIE = "wv_session";
 export const SESSION_TTL_SECONDS = 90 * 24 * 60 * 60;
 
 function bytesToBase64Url(bytes: ArrayBuffer): string {

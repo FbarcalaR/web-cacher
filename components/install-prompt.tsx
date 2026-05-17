@@ -7,7 +7,7 @@ type BeforeInstallPromptEvent = Event & {
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 };
 
-const DISMISS_KEY = "wc_install_dismissed";
+const DISMISS_KEY = "wv_install_dismissed";
 
 function subscribe(callback: () => void): () => void {
   if (typeof window === "undefined") return () => {};
@@ -41,11 +41,11 @@ export function InstallPrompt() {
   return (
     <div
       role="dialog"
-      aria-label="Install web-cacher"
+      aria-label="Install wohnvault"
       className="fixed inset-x-0 z-20 mx-auto flex w-full max-w-md flex-col gap-2 rounded-2xl border border-border bg-background p-4 text-sm shadow-lg"
       style={{ bottom: "max(1rem, env(safe-area-inset-bottom))" }}
     >
-      <p className="font-medium">Install web-cacher</p>
+      <p className="font-medium">Install wohnvault</p>
       <p className="text-muted-foreground">
         Add to your home screen to save ads straight from Chrome&apos;s share sheet.
       </p>
