@@ -4,7 +4,7 @@ export default function HelpPage() {
   return (
     <article className="flex flex-col gap-5">
       <header className="flex flex-col gap-1">
-        <h1 className="text-xl font-semibold tracking-tight">How to use web-cacher</h1>
+        <h1 className="text-xl font-semibold tracking-tight">How to use wohnvault</h1>
         <p className="text-sm text-muted-foreground">
           Designed for one user, on an Android phone, in Chrome.
         </p>
@@ -19,7 +19,7 @@ export default function HelpPage() {
             Either tap the &ldquo;Install app&rdquo; prompt at the top of the
             screen, or open the Chrome menu (⋮) → <em>Install app</em>.
           </li>
-          <li>web-cacher now lives on your home screen.</li>
+          <li>wohnvault now lives on your home screen.</li>
         </ol>
       </section>
 
@@ -29,7 +29,7 @@ export default function HelpPage() {
           <li>Open any ImmoScout24 or Immowelt expose in Chrome.</li>
           <li>Tap the Chrome share button.</li>
           <li>
-            Pick <strong>web-cacher</strong> from the share sheet (it appears
+            Pick <strong>wohnvault</strong> from the share sheet (it appears
             once the app is installed).
           </li>
           <li>

@@ -5,8 +5,8 @@ import { ServiceWorkerRegistration } from "@/components/service-worker-registrat
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "web-cacher",
-  description: "Personal archive for ImmoScout24 and Immowelt ads.",
+  title: "wohnvault",
+  description: "Personal vault for ImmoScout24 and Immowelt ads.",
   manifest: "/manifest.webmanifest",
   icons: {
     icon: [
@@ -18,7 +18,7 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "web-cacher",
+    title: "wohnvault",
   },
 };
 

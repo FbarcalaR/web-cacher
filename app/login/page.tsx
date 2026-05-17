@@ -13,7 +13,7 @@ export default async function LoginPage({
         className="flex w-full max-w-xs flex-col gap-4 rounded-2xl border border-border bg-background p-6 shadow-sm"
       >
         <div className="flex flex-col gap-1">
-          <h1 className="text-lg font-semibold tracking-tight">web-cacher</h1>
+          <h1 className="text-lg font-semibold tracking-tight">wohnvault</h1>
           <p className="text-sm text-muted-foreground">Enter the password to continue.</p>
         </div>
         <input type="hidden" name="next" value={next ?? ""} />

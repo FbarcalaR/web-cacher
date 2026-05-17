@@ -25,7 +25,7 @@ native apps, anything multi-user.
 | Photo storage   | Vercel Blob                             | One-line upload from a server action; signed-URL reads.             |
 | Validation      | Zod                                     | Shared schemas for server actions and PWA front-end.                |
 | Ingestion       | **Free-tier scraping service** (primary), **on-device HTML capture** (fallback) | See [Ingestion](#ingestion). |
-| Install         | **Installable PWA** with Web Share Target | Phone shows web-cacher in the Android share sheet; no app store.  |
+| Install         | **Installable PWA** with Web Share Target | Phone shows wohnvault in the Android share sheet; no app store.  |
 | Auth            | Single shared password via middleware   | One user. No need for a user table or OAuth.                        |
 
 ## Ingestion
@@ -47,7 +47,7 @@ cover the call budget.
 ### Capture flow
 
 1. User browsing ImmoScout24 / Immowelt in mobile Chrome taps **Share** →
-   picks **web-cacher** (we register as a Web Share Target).
+   picks **wohnvault** (we register as a Web Share Target).
 2. The PWA receives `?url=...`, displays a "Saving…" screen, and POSTs the
    URL to `/api/ads/ingest`.
 3. Server calls the scraping service: "fetch this URL with a real browser,
