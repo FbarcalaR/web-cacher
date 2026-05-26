@@ -32,6 +32,14 @@ export async function ingestAd(rawUrl: string): Promise<IngestResult> {
   const adId = existing[0]?.id ?? crypto.randomUUID();
   const isNew = !existing[0];
 
+  // On re-ingest, delete old photos FIRST so the new upload (which now gets
+  // randomised blob paths) never collides with old URLs. If the new upload
+  // later fails, the user still has the ad row — just with no photos until
+  // the next save.
+  if (!isNew) {
+    await deleteExistingPhotos(adId);
+  }
+
   const photos = await uploadAdPhotos(
     adId,
     parsed.photos.map((p) => p.url),
@@ -59,7 +67,6 @@ export async function ingestAd(rawUrl: string): Promise<IngestResult> {
   if (isNew) {
     await db().insert(ads).values(rowValues);
   } else {
-    await replaceExistingPhotos(adId);
     await db().update(ads).set(rowValues).where(eq(ads.id, adId));
   }
 
@@ -79,23 +86,16 @@ export async function ingestAd(rawUrl: string): Promise<IngestResult> {
   return { id: adId, created: isNew };
 }
 
-/**
- * When re-ingesting an existing ad, drop the old photos from both Blob and
- * the DB so we don't accumulate stale variants. The new photo rows are
- * inserted afterwards by the caller.
- */
-async function replaceExistingPhotos(adId: string): Promise<void> {
+async function deleteExistingPhotos(adId: string): Promise<void> {
   const existing = await db()
     .select({ id: adPhotos.id, blobUrl: adPhotos.blobUrl })
     .from(adPhotos)
     .where(eq(adPhotos.adId, adId));
   if (existing.length === 0) return;
-  // Best-effort blob deletion: if a token / path is stale we still want the
-  // DB to converge to the new state.
   try {
     await del(existing.map((p) => p.blobUrl));
   } catch {
-    // Swallow — the old blob will eventually be orphaned, not a correctness issue.
+    // Best-effort — orphan blobs are a storage cost, not a correctness issue.
   }
   await db()
     .delete(adPhotos)
@@ -110,7 +110,6 @@ async function replaceExistingPhotos(adId: string): Promise<void> {
 function normaliseUrl(raw: string): string {
   const trimmed = raw.trim();
   const u = new URL(trimmed);
-  // Strip query + hash — tracking junk on these URLs is noise.
   u.search = "";
   u.hash = "";
   return u.toString();

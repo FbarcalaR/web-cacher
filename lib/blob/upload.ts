@@ -48,7 +48,6 @@ export async function uploadAdPhotos(
     const blob = await put(blobPath, bytes, {
       access: "public",
       contentType,
-      addRandomSuffix: false,
     });
     out.push({ blobUrl: blob.url, blobPath, position: i });
   }
