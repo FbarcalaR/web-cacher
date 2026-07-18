@@ -2,18 +2,18 @@ import { parseEuroToCents, parseNumericString } from "./extract";
 import { type ParsedAd, type ParsedPhoto } from "./types";
 
 /**
- * Immowelt (immowelt.de). Single signal source:
+ * Immowelt (immowelt.de). Primary signal source:
  *
  *   <script id="__UFRN_LIFECYCLE_SERVERREQUEST__">
  *     window["__UFRN_LIFECYCLE_SERVERREQUEST__"] = JSON.parse("<escaped JSON>");
  *   </script>
  *
  * The escaped JSON is the full server-render state. `app_cldp.data.classified`
- * carries everything we need: id, title, prices, address, description sections,
- * features, energy data, and the gallery (with full CDN URLs).
- *
- * JSON-LD on Immowelt only has a template-style title and no structured
- * fields, so we ignore it.
+ * carries everything we need for text fields. Images used to live cleanly at
+ * `classified.sections.gallery.images[]` — in practice we've seen Immowelt
+ * move that around (empty at first hydration, populated later via a client
+ * fetch), so we try several known locations in the state blob and, as a last
+ * resort, extract the visible image URLs from the pre-hydration DOM.
  */
 
 type ImmoweltState = {
@@ -51,14 +51,10 @@ type ImmoweltClassified = {
     features?: {
       preview?: Array<{ value?: string }>;
     };
-    gallery?: {
-      images?: Array<{
-        url?: string;
-        description?: string | null;
-        title?: string | null;
-        alt?: string | null;
-      }>;
-    };
+    gallery?: unknown;
+    mediaGallery?: unknown;
+    enrichedMedia?: unknown;
+    media?: unknown;
   };
 };
 
@@ -106,7 +102,7 @@ export function parseImmowelt(url: string, html: string): ParsedAd {
     addressZip: address.zipCode?.trim() || null,
     addressCity: address.city?.trim() || null,
     features: buildFeatures(classified),
-    photos: buildPhotos(classified),
+    photos: buildPhotos(classified, html),
     rawPayload: {
       classified: classified as unknown as Record<string, unknown>,
     },
@@ -117,10 +113,6 @@ function extractServerState(html: string): ImmoweltState | null {
   const m = SCRIPT_RE.exec(html);
   if (!m) return null;
   try {
-    // The match is the body between the quotes of `JSON.parse("...")`.
-    // Wrapping it in quotes and JSON.parsing it once unescapes the JS string
-    // literal (\\", \\n, \\uXXXX) into the inner JSON text, which we then
-    // parse a second time.
     const innerJson = JSON.parse(`"${m[1]!}"`);
     return JSON.parse(innerJson) as ImmoweltState;
   } catch {
@@ -153,8 +145,6 @@ function buildDescription(c: ImmoweltClassified): string {
     if (!raw) continue;
     const heading = section?.headline?.trim() ?? fallbackHeading;
     parts.push(`<h2>${escapeHtml(heading)}</h2>`);
-    // Their description already contains <br> tags. Split paragraphs by
-    // double-<br> and wrap each in <p>; single <br> becomes a hard break.
     const paragraphs = raw
       .replace(/<\/?b>/g, "")
       .replace(/<\/?i>/g, "")
@@ -178,20 +168,114 @@ function buildFeatures(c: ImmoweltClassified): string[] {
   return out;
 }
 
-function buildPhotos(c: ImmoweltClassified): ParsedPhoto[] {
-  const imgs = c.sections?.gallery?.images ?? [];
+// ---------- image extraction --------------------------------------------
+
+function buildPhotos(c: ImmoweltClassified, html: string): ParsedPhoto[] {
+  // Prefer the state blob — it contains clean base URLs. If it's empty
+  // (Immowelt has moved the gallery data or dropped it from SSR), fall back
+  // to DOM extraction, which finds the size-parameterised srcset URLs of
+  // the first few visible gallery images. Better than nothing.
+  const fromState = extractPhotosFromState(c);
+  if (fromState.length > 0) return fromState;
+  return extractPhotosFromDom(html);
+}
+
+type PhotoLike = {
+  url?: unknown;
+  imageUrl?: unknown;
+  src?: unknown;
+  description?: unknown;
+  caption?: unknown;
+  alt?: unknown;
+  title?: unknown;
+};
+
+const STATE_PHOTO_PATHS: string[][] = [
+  ["gallery", "images"],
+  ["gallery", "previews"],
+  ["gallery", "items"],
+  ["mediaGallery", "images"],
+  ["mediaGallery", "items"],
+  ["enrichedMedia", "medias"],
+  ["enrichedMedia", "images"],
+  ["media", "images"],
+];
+
+function extractPhotosFromState(c: ImmoweltClassified): ParsedPhoto[] {
+  const sections = (c.sections ?? {}) as Record<string, unknown>;
   const out: ParsedPhoto[] = [];
-  for (const img of imgs) {
-    if (!img.url) continue;
-    out.push({
-      url: img.url,
-      caption: img.description?.trim() || null,
-      width: null,
-      height: null,
-    });
+  const seen = new Set<string>();
+  for (const path of STATE_PHOTO_PATHS) {
+    const arr = getNested(sections, path);
+    if (!Array.isArray(arr)) continue;
+    for (const raw of arr) {
+      if (!raw || typeof raw !== "object") continue;
+      const item = raw as PhotoLike;
+      const url = pickUrl(item);
+      if (!url || seen.has(url)) continue;
+      seen.add(url);
+      out.push({
+        url,
+        caption: pickCaption(item),
+        width: null,
+        height: null,
+      });
+    }
   }
   return out;
 }
+
+function extractPhotosFromDom(html: string): ParsedPhoto[] {
+  const out: ParsedPhoto[] = [];
+  const seen = new Set<string>();
+  const re = /srcset="(https:\/\/mms\.immowelt\.de\/[^"]+)"/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const url = decodeHtmlEntities(m[1]!);
+    if (seen.has(url)) continue;
+    seen.add(url);
+    out.push({ url, caption: null, width: null, height: null });
+  }
+  return out;
+}
+
+function getNested(obj: Record<string, unknown>, path: string[]): unknown {
+  let current: unknown = obj;
+  for (const key of path) {
+    if (!current || typeof current !== "object") return undefined;
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current;
+}
+
+function pickUrl(item: PhotoLike): string | null {
+  const candidates = [item.url, item.imageUrl, item.src];
+  for (const c of candidates) {
+    if (typeof c === "string" && (c.startsWith("https://") || c.startsWith("http://"))) {
+      return c;
+    }
+  }
+  return null;
+}
+
+function pickCaption(item: PhotoLike): string | null {
+  const candidates = [item.description, item.caption, item.alt, item.title];
+  for (const c of candidates) {
+    if (typeof c === "string" && c.trim()) return c.trim();
+  }
+  return null;
+}
+
+function decodeHtmlEntities(s: string): string {
+  return s
+    .replaceAll("&amp;", "&")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&#39;", "'");
+}
+
+// ---------- misc helpers ------------------------------------------------
 
 function escapeHtml(s: string): string {
   return s
