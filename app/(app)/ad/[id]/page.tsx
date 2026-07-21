@@ -1,4 +1,5 @@
 import { asc, eq } from "drizzle-orm";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import sanitizeHtml from "sanitize-html";
 
@@ -116,6 +117,12 @@ export default async function AdPage({ params }: { params: Promise<{ id: string 
         >
           Open original
         </a>
+        <Link
+          href={`/ad/${ad.id}/edit`}
+          className="block rounded-full border border-border bg-background px-4 py-2.5 text-center text-sm font-medium"
+        >
+          Edit
+        </Link>
         <DeleteAdButton adId={ad.id} />
       </footer>
     </article>
