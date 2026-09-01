@@ -15,6 +15,23 @@ These are the ground truth for the Phase 2 parsers and their tests.
 Use a short descriptive slug — e.g. `mitte-2zi-95k.html`,
 `prenzlberg-3zi-balkon.html` — so test failures stay readable.
 
+## Keep both templates covered
+
+Both sites have changed their markup mid-project, and the parsers keep a
+fallback path for the older shape. So when you add fresh captures, **don't
+delete the old ones** — they are the only regression cover for those paths:
+
+| Fixture                          | Covers                                              |
+| -------------------------------- | --------------------------------------------------- |
+| `immoscout24/nymphenburg-*`, `schwere-reiter-*`, `ramersdorf-4-5zi-*` | Legacy `<pre class="is24qa-…">` description markup |
+| `immoscout24/neuperlach-*`, `laim-*` | Current template: description only in `IS24.ssr.frontendModel` |
+| `immoscout24/neubau-projekt-*`   | A `/neubau/…` project page, which must be rejected  |
+| `immowelt/schwabing-west-*`      | DOM-only render (no state blob)                     |
+| `immowelt/milbertshofen-*`, `ramersdorf-2zi-*`, `moosach-*` | Inline `__UFRN_LIFECYCLE_SERVERREQUEST__` state |
+
+Fixtures are listed in `.prettierignore`: they are verbatim captures and
+reformatting them would change what the parsers are tested against.
+
 ## What we need
 
 - At least 3 per site, ideally 5.
@@ -23,6 +40,19 @@ Use a short descriptive slug — e.g. `mitte-2zi-95k.html`,
 - All sourced from real, currently-live ads at capture time. Once the
   scraping service is wired up in Phase 3, we can re-fetch fixtures
   automatically when parsers change.
+
+## Scrub third-party tokens before committing
+
+Both portals bake live API credentials into the markup they serve. Those
+are not ours to republish, and GitHub push protection rejects the push if
+they survive. After capturing, replace the Mapbox static-map token:
+
+```
+perl -pi -e 's/pk\.eyJ[A-Za-z0-9._-]+/pk.REDACTED_MAPBOX_TOKEN/g' <file>
+```
+
+No parser reads it, so redacting changes nothing about what the tests
+assert — verify by re-running `pnpm test` after the edit.
 
 ## Note on privacy
 

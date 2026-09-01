@@ -1,35 +1,265 @@
 import { parse as parseHtml } from "node-html-parser";
 
-import { parseEuroToCents, parseNumericString } from "./extract";
+import {
+  buildSectionsHtml,
+  decodeHtmlEntities,
+  parseEuroToCents,
+  parseNumericString,
+  sliceStringLiteral,
+} from "./extract";
 import { type ParsedAd, type ParsedPhoto } from "./types";
 
 /**
- * Immowelt (immowelt.de) — DOM-based parser.
+ * Immowelt (immowelt.de). Two paths, tried in order:
  *
- * Immowelt used to inline the whole listing state under
- *   window["__UFRN_LIFECYCLE_SERVERREQUEST__"] = JSON.parse("<escaped JSON>")
- * which made parsing trivial. As of mid-2026 they've dropped every inline
- * script and render the page purely from the DOM, so we scrape the same
- * `data-testid="cdp-*"` anchors the site itself uses:
+ * 1. `window["__UFRN_LIFECYCLE_SERVERREQUEST__"] = JSON.parse("…")` — the
+ *    complete listing state, JSON escaped once more as a JS string literal.
+ *    Immowelt briefly stopped emitting it (hence the DOM parser below), but
+ *    it is back and it is strictly better: it carries the *whole* gallery,
+ *    the real street/city/district split, the untruncated descriptions and
+ *    an unambiguous Online-ID.
+ * 2. The DOM `data-testid="cdp-*"` anchors. Only the first 1–3 photos
+ *    survive in the pre-hydration markup and the address is collapsed into
+ *    one string, so this is a fallback for pages served without the blob.
  *
- *   cdp-hardfacts-title             — heading like "Wohnung zur Miete"
- *   cdp-hardfacts-keyfacts          — "3 Zimmer • 76,9 m² • 5. Geschoss • …"
- *   cdp-price                       — Warmmiete / Kaltmiete / Nebenkosten / Kaution
- *   cdp-location-address            — "Schwabing-West, München (80797)"
- *   cdp-main-description-…-text     — main description body (HTML with <br>)
- *   cdp-location-description-…-text — location description body
- *   cdp-additional-description-…-text — extras
- *   cdp-features                    — feature <li> list
- *   cdp-classified-keys             — "Online-ID : 2685SVQAS9FH ..."
- *
- * Images: Immowelt now lazy-loads the gallery via a client-side fetch AFTER
- * the initial render. What survives in the pre-hydration HTML is typically
- * the OG cover + the first 1–2 gallery thumbnails. We collect all
- * <img src="…mms.immowelt.de…"> URLs, plus the og:image, and dedupe. Better
- * than nothing; a full gallery would require driving a browser session.
+ * `parseImmowelt` picks path 1 whenever the blob parses and path 2
+ * otherwise, then fails loud if neither yields a usable listing — better an
+ * error than an ad row full of nulls.
  */
 
 export function parseImmowelt(url: string, html: string): ParsedAd {
+  const state = extractServerState(html);
+  if (state) return parseFromState(url, state);
+  return parseFromDom(url, html);
+}
+
+// ---------- path 1: inline server state ---------------------------------
+
+interface ClassifiedPrice {
+  value?: { main?: { value?: string; ariaLabel?: string } };
+  label?: { main?: string };
+}
+
+interface Classified {
+  id?: string;
+  title?: string;
+  domains?: {
+    medias?: {
+      images?: Array<{ url?: string; description?: string | null }>;
+      floorplans?: Array<{ url?: string; description?: string | null }>;
+    };
+  };
+  sections?: {
+    location?: {
+      address?: {
+        street?: string;
+        city?: string;
+        zipCode?: string;
+        district?: string;
+      };
+    };
+    hardFacts?: {
+      title?: string;
+      facts?: Array<{ type?: string; value?: string; splitValue?: string; label?: string }>;
+    };
+    price?: {
+      base?: { main?: ClassifiedPrice; details?: ClassifiedPrice[] };
+      additional?: Array<{ label?: string; text?: string }>;
+    };
+    key?: { keys?: Array<{ label?: string; value?: string }> };
+    features?: {
+      preview?: Array<{ value?: string }>;
+      details?: { categories?: Array<{ elements?: Array<{ value?: string }> }> } | null;
+    };
+    energy?: { features?: Array<{ label?: string; value?: string }> };
+    mainDescription?: { headline?: string; description?: string };
+    areaDescription?: { headline?: string; description?: string };
+    extendedInfoDescription?: { headline?: string; description?: string };
+  };
+}
+
+/**
+ * Peel `JSON.parse("<escaped>")` — the argument is a JS string literal whose
+ * contents are themselves a JSON document, so it takes two parses.
+ */
+function extractServerState(html: string): Classified | null {
+  const marker = 'window["__UFRN_LIFECYCLE_SERVERREQUEST__"]';
+  const at = html.indexOf(marker);
+  if (at < 0) return null;
+  const parseAt = html.indexOf("JSON.parse(", at);
+  if (parseAt < 0) return null;
+  const quoteAt = html.indexOf('"', parseAt);
+  if (quoteAt < 0) return null;
+  const literal = sliceStringLiteral(html, quoteAt);
+  if (!literal) return null;
+  try {
+    const json = JSON.parse(literal) as string;
+    const state = JSON.parse(json) as {
+      app_cldp?: { data?: { classified?: Classified } };
+    };
+    return state.app_cldp?.data?.classified ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function parseFromState(url: string, c: Classified): ParsedAd {
+  const sections = c.sections ?? {};
+
+  const sourceId =
+    pickText(findKey(sections.key?.keys, "Online-ID")) ??
+    pickText(c.id) ??
+    URL_ID_RE.exec(url)?.[1] ??
+    null;
+  if (!sourceId) {
+    throw new Error(`Immowelt: could not determine source id from ${url}`);
+  }
+
+  const address = sections.location?.address ?? {};
+  const facts = sections.hardFacts?.facts ?? [];
+  const price = sections.price ?? {};
+
+  const coldRent = parseEuroToCents(priceValue(price.base?.main));
+  const warmRent = parseEuroToCents(
+    priceValue(price.base?.details?.find((d) => d.label?.main === "Warmmiete")),
+  );
+  const deposit = parseEuroToCents(
+    pickText(price.additional?.find((a) => a.label === "Kaution")?.text),
+  );
+
+  // Fixed headings rather than each section's own `headline`: the main one
+  // repeats the ad title verbatim, and the other two are already "Lage" /
+  // "Weitere Informationen" on every listing we have seen.
+  const descriptionHtml = buildSectionsHtml([
+    { heading: "Objektbeschreibung", body: sections.mainDescription?.description },
+    { heading: "Lage", body: sections.areaDescription?.description },
+    {
+      heading: "Weitere Informationen",
+      body: sections.extendedInfoDescription?.description,
+    },
+  ]);
+
+  return {
+    source: "immowelt",
+    sourceId,
+    sourceUrl: canonicalUrl(url, sourceId),
+    title: stateTitle(c, address),
+    descriptionHtml,
+    priceColdCents: coldRent,
+    priceWarmCents: warmRent,
+    depositCents: deposit,
+    sizeSqm: parseNumericString(factValue(facts, "livingSpace")),
+    rooms: parseNumericString(factValue(facts, "numberOfRooms")),
+    // No district column in the schema; the street line is the closest
+    // place for it, and for redacted listings it is all the location we get.
+    addressStreet: pickText(address.street) ?? pickText(address.district),
+    addressZip: pickText(address.zipCode),
+    addressCity: pickText(address.city),
+    features: stateFeatures(sections),
+    photos: statePhotos(c),
+    rawPayload: {
+      id: c.id ?? null,
+      onlineId: sourceId,
+      address,
+      hardFacts: sections.hardFacts ?? null,
+      price: price.base ?? null,
+      priceAdditional: price.additional ?? null,
+      keys: sections.key?.keys ?? null,
+      energy: sections.energy?.features ?? null,
+    },
+  };
+}
+
+function stateTitle(
+  c: Classified,
+  address: { street?: string; city?: string; district?: string },
+): string {
+  // `classified.title` is the raw description's first line on some listings,
+  // so the curated headline wins when there is one.
+  const headline = pickText(c.sections?.mainDescription?.headline) ?? pickText(oneLine(c.title));
+  if (headline) return headline;
+
+  const kind = pickText(c.sections?.hardFacts?.title) ?? "Wohnung";
+  const location = [address.district, address.city].filter(Boolean).join(", ");
+  return location ? `${kind} — ${location}` : kind;
+}
+
+function stateFeatures(sections: NonNullable<Classified["sections"]>): string[] {
+  const out: string[] = [];
+  const push = (v: string | null) => {
+    if (v && !out.includes(v)) out.push(v);
+  };
+
+  const categories = sections.features?.details?.categories ?? [];
+  for (const category of categories) {
+    for (const el of category.elements ?? []) push(pickText(el.value));
+  }
+  // `details` is null on some listings; `preview` is the shorter mirror of it.
+  for (const el of sections.features?.preview ?? []) push(pickText(el.value));
+
+  for (const f of sections.energy?.features ?? []) {
+    const label = pickText(f.label);
+    const value = pickText(f.value);
+    if (label && value) push(`${label}: ${value}`);
+  }
+  return out;
+}
+
+function statePhotos(c: Classified): ParsedPhoto[] {
+  const medias = c.domains?.medias;
+  const out: ParsedPhoto[] = [];
+  const seen = new Set<string>();
+  // Gallery first, floor plans after — they read as trailing attachments.
+  for (const m of [...(medias?.images ?? []), ...(medias?.floorplans ?? [])]) {
+    const url = pickText(m.url);
+    if (!url || !isImmoweltPhoto(url) || seen.has(url)) continue;
+    seen.add(url);
+    out.push({
+      url,
+      caption: captionOrNull(m.description),
+      width: null,
+      height: null,
+    });
+  }
+  return out;
+}
+
+function priceValue(p: ClassifiedPrice | undefined): string | null {
+  // `ariaLabel` is the unformatted number ("1213.99 €"); `value` is the
+  // German-formatted one. Either parses, prefer the unambiguous one.
+  return pickText(p?.value?.main?.ariaLabel) ?? pickText(p?.value?.main?.value);
+}
+
+function factValue(
+  facts: Array<{ type?: string; splitValue?: string; value?: string }>,
+  type: string,
+): string | null {
+  const fact = facts.find((f) => f.type === type);
+  return pickText(fact?.splitValue) ?? pickText(fact?.value);
+}
+
+function findKey(
+  keys: Array<{ label?: string; value?: string }> | undefined,
+  label: string,
+): string | null {
+  return pickText(keys?.find((k) => k.label === label)?.value);
+}
+
+/**
+ * Photo descriptions are the uploader's filename as often as a caption
+ * ("IMG_1160(1).jpg", "0 ", "Bild 9"). Those are noise on the ad page.
+ */
+function captionOrNull(raw: string | null | undefined): string | null {
+  const text = pickText(raw);
+  if (!text) return null;
+  if (/\.(?:jpe?g|png|webp|gif|heic|tiff?)$/i.test(text)) return null;
+  if (/^(?:bild\s*)?\d+$/i.test(text)) return null;
+  return text.replace(/\s+/g, " ");
+}
+
+// ---------- path 2: DOM fallback ----------------------------------------
+
+function parseFromDom(url: string, html: string): ParsedAd {
   const dom = parseHtml(html);
 
   // Sanity check: the page must include at least one of the DOM anchors we
@@ -42,26 +272,21 @@ export function parseImmowelt(url: string, html: string): ParsedAd {
     dom.querySelector('[data-testid="cdp-location-address"]');
   if (!hasAnchor) {
     throw new Error(
-      `Immowelt: no cdp-* anchors in ${url} (page may have been bot-blocked or the template changed)`,
+      `Immowelt: no inline listing state and no cdp-* anchors in ${url} ` +
+        "(page may have been bot-blocked or the template changed)",
     );
   }
 
-  const sourceId = extractSourceId(dom, url);
+  const sourceId = extractDomSourceId(dom, url);
   if (!sourceId) {
-    throw new Error(
-      `Immowelt: could not determine source id from ${url}`,
-    );
+    throw new Error(`Immowelt: could not determine source id from ${url}`);
   }
 
   const keyfacts = textOf(dom, '[data-testid="cdp-hardfacts-keyfacts"]');
-  const rooms = parseNumericString(
-    matchFirst(keyfacts, /(\d+(?:[.,]\d+)?)\s*Zimmer/i),
-  );
+  const rooms = parseNumericString(matchFirst(keyfacts, /(\d+(?:[.,]\d+)?)\s*Zimmer/i));
   const size = parseNumericString(matchFirst(keyfacts, /(\d+(?:[.,]\d+)?)\s*m²/));
 
-  const priceText = normaliseText(
-    dom.querySelector('[data-testid="cdp-price"]')?.text ?? "",
-  );
+  const priceText = normaliseText(dom.querySelector('[data-testid="cdp-price"]')?.text ?? "");
   const priceValues = extractPriceLabels(priceText);
   const coldRent = parseEuroToCents(priceValues.get("Kaltmiete") ?? null);
   const warmRent = parseEuroToCents(priceValues.get("Warmmiete") ?? null);
@@ -70,17 +295,12 @@ export function parseImmowelt(url: string, html: string): ParsedAd {
   const addressRaw = textOf(dom, '[data-testid="cdp-location-address"]');
   const address = parseAddress(addressRaw);
 
-  const title = buildTitle(dom, address);
-  const descriptionHtml = buildDescription(dom);
-  const features = extractFeatures(dom);
-  const photos = extractPhotos(dom, html);
-
   return {
     source: "immowelt",
     sourceId,
     sourceUrl: canonicalUrl(url, sourceId),
-    title,
-    descriptionHtml,
+    title: buildDomTitle(dom, address),
+    descriptionHtml: buildDomDescription(dom),
     priceColdCents: coldRent,
     priceWarmCents: warmRent,
     depositCents: deposit,
@@ -89,8 +309,8 @@ export function parseImmowelt(url: string, html: string): ParsedAd {
     addressStreet: address.district,
     addressZip: address.zip,
     addressCity: address.city,
-    features,
-    photos,
+    features: extractDomFeatures(dom),
+    photos: extractDomPhotos(dom, html),
     rawPayload: {
       addressRaw,
       keyfacts,
@@ -103,17 +323,18 @@ export function parseImmowelt(url: string, html: string): ParsedAd {
 // ---------- id --------------------------------------------------------
 
 const URL_ID_RE = /\/expose\/([A-Za-z0-9-]+)/;
-const ONLINE_ID_RE = /Online-ID\s*[:=]\s*([A-Z0-9]{6,})/i;
+// The ID is a fixed-length alphanumeric code. Anchoring the end on a
+// non-alphanumeric boundary keeps the following label out of the match when
+// node-html-parser has collapsed the two cells into one text run
+// ("Online-ID : 26HSIUS5RBPFAngebot …").
+const ONLINE_ID_RE = /Online-ID\s*[:=]?\s*([0-9A-Z]{8,16})(?![0-9A-Z])/;
 
-function extractSourceId(dom: ReturnType<typeof parseHtml>, url: string): string | null {
+function extractDomSourceId(dom: ReturnType<typeof parseHtml>, url: string): string | null {
   const keys = dom.querySelector('[data-testid="cdp-classified-keys"]')?.text ?? "";
-  // Strip whitespace and split at Referenznummer — with the text collapsed by
-  // node-html-parser the ID would otherwise run straight into "Referenznummer".
   const beforeRef = keys.split(/Referenz/i)[0] ?? keys;
   const online = beforeRef.match(ONLINE_ID_RE)?.[1];
   if (online) return online;
-  const fromUrl = URL_ID_RE.exec(url)?.[1];
-  return fromUrl ?? null;
+  return URL_ID_RE.exec(url)?.[1] ?? null;
 }
 
 // ---------- price -----------------------------------------------------
@@ -178,7 +399,10 @@ function parseAddress(raw: string): {
   const zip = zipMatch?.[1] ?? null;
   const withoutZip = zipMatch ? raw.slice(0, zipMatch.index).trim() : raw.trim();
   const cleaned = withoutZip.replace(/,\s*$/, "");
-  const parts = cleaned.split(",").map((s) => s.trim()).filter(Boolean);
+  const parts = cleaned
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
   if (parts.length >= 2) {
     return { district: parts[0]!, city: parts[1]!, zip };
   }
@@ -190,7 +414,7 @@ function parseAddress(raw: string): {
 
 // ---------- title -----------------------------------------------------
 
-function buildTitle(
+function buildDomTitle(
   dom: ReturnType<typeof parseHtml>,
   address: { district: string | null; city: string | null },
 ): string {
@@ -199,9 +423,7 @@ function buildTitle(
   if (heading && location) return `${heading} — ${location}`;
   if (heading) return heading;
   if (location) return `Wohnung — ${location}`;
-  const ogTitle = dom
-    .querySelector('meta[property="og:title"]')
-    ?.getAttribute("content");
+  const ogTitle = dom.querySelector('meta[property="og:title"]')?.getAttribute("content");
   return ogTitle?.trim() || "Wohnung";
 }
 
@@ -222,31 +444,18 @@ const DESCRIPTION_TARGETS: Array<{ selector: string; heading: string }> = [
   },
 ];
 
-function buildDescription(dom: ReturnType<typeof parseHtml>): string {
-  const parts: string[] = [];
-  for (const { selector, heading } of DESCRIPTION_TARGETS) {
-    const node = dom.querySelector(selector);
-    if (!node) continue;
-    const raw = node.innerHTML.trim();
-    if (!raw) continue;
-    parts.push(`<h2>${escapeHtml(heading)}</h2>`);
-    const paragraphs = raw
-      .replace(/<\/?b>/g, "")
-      .replace(/<\/?i>/g, "")
-      .split(/(?:<br\s*\/?>\s*){2,}/i);
-    for (const p of paragraphs) {
-      const clean = p.replace(/<br\s*\/?>/gi, "\n").trim();
-      const stripped = clean.replace(/<[^>]+>/g, "").trim();
-      if (!stripped) continue;
-      parts.push(`<p>${escapeHtml(stripped).replace(/\n/g, "<br>")}</p>`);
-    }
-  }
-  return parts.join("\n");
+function buildDomDescription(dom: ReturnType<typeof parseHtml>): string {
+  return buildSectionsHtml(
+    DESCRIPTION_TARGETS.map(({ selector, heading }) => ({
+      heading,
+      body: dom.querySelector(selector)?.innerHTML ?? null,
+    })),
+  );
 }
 
 // ---------- features --------------------------------------------------
 
-function extractFeatures(dom: ReturnType<typeof parseHtml>): string[] {
+function extractDomFeatures(dom: ReturnType<typeof parseHtml>): string[] {
   const root = dom.querySelector('[data-testid="cdp-features"]');
   if (!root) return [];
   const out: string[] = [];
@@ -261,20 +470,15 @@ function extractFeatures(dom: ReturnType<typeof parseHtml>): string[] {
 // ---------- photos ----------------------------------------------------
 
 /**
- * The gallery lazy-loads after render — only 1–3 photos survive in the
- * pre-hydration HTML. Collect them all, plus the OG cover image, and
- * dedupe by URL. Filters agency-logo images by alt-text heuristic.
+ * Without the state blob the gallery lazy-loads after render, so only 1–3
+ * photos survive in the markup. Collect them all, plus the OG cover image,
+ * and dedupe by URL. Filters agency-logo images by alt-text heuristic.
  */
-function extractPhotos(
-  dom: ReturnType<typeof parseHtml>,
-  html: string,
-): ParsedPhoto[] {
+function extractDomPhotos(dom: ReturnType<typeof parseHtml>, html: string): ParsedPhoto[] {
   const out: ParsedPhoto[] = [];
   const seen = new Set<string>();
 
-  const ogImage = dom
-    .querySelector('meta[property="og:image"]')
-    ?.getAttribute("content");
+  const ogImage = dom.querySelector('meta[property="og:image"]')?.getAttribute("content");
   if (ogImage && isImmoweltPhoto(ogImage)) {
     seen.add(ogImage);
     out.push({ url: ogImage, caption: null, width: null, height: null });
@@ -287,7 +491,7 @@ function extractPhotos(
     seen.add(src);
     out.push({
       url: src,
-      caption: img.getAttribute("alt")?.trim() || null,
+      caption: captionOrNull(img.getAttribute("alt")),
       width: null,
       height: null,
     });
@@ -327,7 +531,7 @@ function looksLikeLogo(
 function normaliseText(s: string): string {
   return s
     .replace(/&nbsp;/g, " ")
-    .replace(/ /g, " ")
+    .replace(/ /g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -340,21 +544,15 @@ function matchFirst(text: string, re: RegExp): string | null {
   return re.exec(text)?.[1] ?? null;
 }
 
-function decodeHtmlEntities(s: string): string {
-  return s
-    .replaceAll("&amp;", "&")
-    .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">")
-    .replaceAll("&quot;", '"')
-    .replaceAll("&#39;", "'");
+function oneLine(s: string | undefined): string | null {
+  if (!s) return null;
+  const first = s.split(/<br\s*\/?>|\n/i)[0] ?? "";
+  return pickText(decodeHtmlEntities(first.replace(/<[^>]+>/g, "")));
 }
 
-function escapeHtml(s: string): string {
-  return s
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
+function pickText(v: string | null | undefined): string | null {
+  const trimmed = v?.replace(/ /g, " ").trim();
+  return trimmed ? trimmed : null;
 }
 
 function canonicalUrl(url: string, sourceId: string): string {
