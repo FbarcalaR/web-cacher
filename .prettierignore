@@ -3,3 +3,7 @@ node_modules/
 public/
 pnpm-lock.yaml
 *.md
+
+# Captured verbatim from the live sites — reformatting would change what
+# the parsers are tested against.
+lib/parsers/__fixtures__/
